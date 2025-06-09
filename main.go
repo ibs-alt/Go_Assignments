@@ -1,123 +1,215 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
-	"fmt"
-	"os"
-	"strings"
+	"bufio"         // For reading user input
+	"encoding/json" // For JSON serialization/deserialization
+	"flag"          // For command-line flag parsing
+	"fmt"           // For formatted I/O
+	"log"           // For error logging
+	"os"            // For file operations
+	"strconv"       // For string to integer conversion
+	"strings"       // For string manipulation
 )
 
-type Todo struct { // Todo represents a single task with a description and status.
-	Description string `json:"description"`
-	Status      string `json:"status"`
+// Todo represents a single task item with unique ID, description and status
+type Todo struct {
+	ID          int    `json:"id"`          // Unique identifier for each task
+	Description string `json:"description"` // Task description
+	Status      string `json:"status"`      // Current status of the task
 }
 
-const fileName = "data.json"
+// fileName stores the path to the JSON file, configurable via command-line flag
+var fileName string
 
-func loadTodos() []Todo { // loadTodos reads the JSON-encoded tasks from the file
+// init runs before main(), sets up command-line flags
+func init() {
+	flag.StringVar(&fileName, "file", "data.json", "Path to the JSON file storing tasks")
+	flag.Parse()
+}
+
+// loadTodos reads and parses the JSON file containing tasks
+// Returns the slice of todos and any error encountered
+func loadTodos() ([]Todo, error) {
+	file, err := os.ReadFile(fileName)
+	if err != nil {
+		return nil, err
+	}
+
 	var todos []Todo
-	data, err := os.ReadFile(fileName)
-	if err == nil {
-		_ = json.Unmarshal(data, &todos)
+	if err := json.Unmarshal(file, &todos); err != nil {
+		return nil, err
 	}
-	return todos
+	return todos, nil
 }
 
-func saveTodos(todos []Todo) { // saveTodos into JSON format and writes them to the file.
-	data, _ := json.MarshalIndent(todos, "", "  ")
-	_ = os.WriteFile(fileName, data, 0644)
+// saveTodos writes the todos slice to the JSON file
+// Returns any error encountered during saving
+func saveTodos(todos []Todo) error {
+	data, err := json.MarshalIndent(todos, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(fileName, data, 0644)
 }
 
-func printTodos(todos []Todo) { // printTodos prints all tasks with their index and current status
+// printTodos displays all todos with their IDs and status
+func printTodos(todos []Todo) {
 	fmt.Println("\nYour To-Do List:")
-	for i, t := range todos {
-		fmt.Printf("%d. %s [%s]\n", i+1, t.Description, t.Status)
+	for _, t := range todos {
+		fmt.Printf("ID %d: %s [%s]\n", t.ID, t.Description, t.Status)
 	}
+}
+
+// nextID determines the next available ID for a new task
+// Returns the maximum ID found plus one
+func nextID(todos []Todo) int {
+	maxID := 0
+	for _, t := range todos {
+		if t.ID > maxID {
+			maxID = t.ID
+		}
+	}
+	return maxID + 1
 }
 
 func main() {
-	todos := loadTodos()                // Load tasks from file into memory.
-	reader := bufio.NewReader(os.Stdin) // Create buffered reader for user input.
+	// Load existing todos, handle errors except for non-existent file
+	todos, err := loadTodos()
+	if err != nil && !os.IsNotExist(err) {
+		log.Fatalf("Failed to load todos: %v", err)
+	}
 
+	// Create buffered reader for user input
+	reader := bufio.NewReader(os.Stdin)
+
+	// Define menu text
+	menu := `
+Choose an option:
+1. Add Task
+2. List Tasks
+3. Update Task Status
+4. Delete Task
+5. Exit
+-> `
+
+	// Main program loop
 	for {
-		fmt.Println("\nChoose an option:") // Menu prompt
-		fmt.Println("1. Add Task")
-		fmt.Println("2. List Tasks")
-		fmt.Println("3. Update Task Status")
-		fmt.Println("4. Delete Task")
-		fmt.Println("5. Exit")
-		fmt.Print("-> ")
-
-		input, _ := reader.ReadString('\n') // Read user choice
+		fmt.Print(menu)
+		input, _ := reader.ReadString('\n')
 		input = strings.TrimSpace(input)
 
-		switch input { // Handle user input
-		case "1":
+		switch input {
+		case "1": // Add new task
 			fmt.Print("Enter Task: ")
 			desc, _ := reader.ReadString('\n')
 			desc = strings.TrimSpace(desc)
-			todos = append(todos, Todo{Description: desc, Status: "Not started"})
-			saveTodos(todos)
-			fmt.Println("Task added.")
+			// Create new task with next available ID
+			newTask := Todo{ID: nextID(todos), Description: desc, Status: "Not started"}
+			todos = append(todos, newTask)
+			if err := saveTodos(todos); err != nil {
+				log.Printf("Failed to save task: %v", err)
+			} else {
+				fmt.Println("Task added.")
+			}
 
 		case "2": // List all tasks
 			printTodos(todos)
 
 		case "3": // Update task status
 			printTodos(todos)
-			fmt.Print("Enter task number to update: ")
-			var i int
-			fmt.Scanln(&i)
-			if i < 1 || i > len(todos) {
-				fmt.Println("Invalid task number.")
+			// Get task ID from user
+			fmt.Print("Enter ID of task to update: ")
+			idInput, _ := reader.ReadString('\n')
+			idInput = strings.TrimSpace(idInput)
+			id, err := strconv.Atoi(idInput)
+			if err != nil {
+				fmt.Println("Invalid ID.")
 				continue
 			}
 
+			// Find task with given ID
+			index := -1
+			for i, t := range todos {
+				if t.ID == id {
+					index = i
+					break
+				}
+			}
+
+			if index == -1 {
+				fmt.Println("Task not found.")
+				continue
+			}
+
+			// Show status options and get user choice
 			fmt.Println("Choose new status:")
 			fmt.Println("1. Not started")
-			fmt.Println("2. In progress")
+			fmt.Println("2. Started")
 			fmt.Println("3. Completed")
 			fmt.Print("-> ")
+			statusInput, _ := reader.ReadString('\n')
+			statusInput = strings.TrimSpace(statusInput)
 
-			var choice int
-			fmt.Scanln(&choice)
-
-			switch choice { // Update status based on user choice
-			case 1:
-				todos[i-1].Status = "Not started"
-			case 2:
-				todos[i-1].Status = "In progress"
-			case 3:
-				todos[i-1].Status = "Completed"
+			// Update task status based on user choice
+			switch statusInput {
+			case "1":
+				todos[index].Status = "Not started"
+			case "2":
+				todos[index].Status = "Started"
+			case "3":
+				todos[index].Status = "Completed"
 			default:
 				fmt.Println("Invalid choice.")
 				continue
 			}
 
-			saveTodos(todos)
-			fmt.Println("Task updated.")
+			// Save updated todos
+			if err := saveTodos(todos); err != nil {
+				log.Printf("Failed to update task: %v", err)
+			} else {
+				fmt.Println("Task updated.")
+			}
 
-		case "4": // Delete a task
+		case "4": // Delete task
 			printTodos(todos)
-			fmt.Print("Enter task number to delete: ")
-			var i int
-			fmt.Scanln(&i)
-			if i < 1 || i > len(todos) {
-				fmt.Println("Invalid task number.")
+			// Get task ID from user
+			fmt.Print("Enter ID of task to delete: ")
+			idInput, _ := reader.ReadString('\n')
+			idInput = strings.TrimSpace(idInput)
+			id, err := strconv.Atoi(idInput)
+			if err != nil {
+				fmt.Println("Invalid ID.")
 				continue
 			}
 
-			todos = append(todos[:i-1], todos[i:]...) // Remove item by slicing
-			saveTodos(todos)
-			fmt.Println("Task deleted.")
+			// Find task with given ID
+			index := -1
+			for i, t := range todos {
+				if t.ID == id {
+					index = i
+					break
+				}
+			}
 
-		case "5":
+			if index == -1 {
+				fmt.Println("Task not found.")
+				continue
+			}
+
+			// Remove task and save updated todos
+			todos = append(todos[:index], todos[index+1:]...)
+			if err := saveTodos(todos); err != nil {
+				log.Printf("Failed to delete task: %v", err)
+			} else {
+				fmt.Println("Task deleted.")
+			}
+
+		case "5": // Exit program
 			fmt.Println("Goodbye!")
 			return
 
 		default: // Handle invalid input
-			fmt.Println("Invalid option. Please try again.")
+			fmt.Println("Invalid option.")
 		}
 	}
 }
