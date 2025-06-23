@@ -1,50 +1,72 @@
-package todo_test
+package todo
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
-
-	"github.com/ibs-alt/Go_Assignments/todo"
 )
 
-func TestAddTodo(t *testing.T) {
-	todos := []todo.Todo{}
-	ctx := context.WithValue(context.Background(), todo.TraceIDKey, "test-trace-id")
+// helpers
 
-	todos = todo.AddTodo(ctx, todos, "Test Task 1")
+func freshActor() (reads chan<- readReq, writes chan<- writeReq, cleanup func()) {
+	ctx := context.WithValue(context.Background(), TraceIDKey, "unit-test")
+	FileName = "unit_data.json"
+	_ = os.Remove(FileName)
 
-	if len(todos) != 1 {
-		t.Errorf("Expected 1 todo, got %d", len(todos))
-	}
-	if todos[0].Description != "Test Task 1" {
-		t.Errorf("Expected 'Test Task 1', got '%s'", todos[0].Description)
-	}
+	reads, writes = StartActor(ctx, FileName, nil)
+	cleanup = func() { _ = os.Remove(FileName) }
+	return
 }
 
-func TestSaveAndLoadTodos(t *testing.T) {
-	ctx := context.WithValue(context.Background(), todo.TraceIDKey, "test-trace-id")
-	fileName := "testdata.json"
-	defer os.Remove(fileName)
+func ask(reads chan<- readReq) []Todo {
+	req := readReq{resp: make(chan []Todo)}
+	reads <- req
+	return <-req.resp
+}
 
-	todos := []todo.Todo{
-		{ID: "1", Description: "Task A", Status: "Not started"},
+func add(w chan<- writeReq, desc string) {
+	wr := writeReq{op: "add", todo: NewTodo(desc), resp: make(chan error)}
+	w <- wr
+	<-wr.resp
+}
+
+// tests
+
+func TestActorAddUpdateDeletePersist(t *testing.T) {
+	reads, writes, cleanup := freshActor()
+	defer cleanup()
+
+	// add
+	add(writes, "alpha")
+	todos := ask(reads)
+	if len(todos) != 1 || todos[0].Description != "alpha" {
+		t.Fatalf("add failed %+v", todos)
+	}
+	id := todos[0].ID
+
+	// update
+	wr := writeReq{op: "update", todo: Todo{ID: id, Status: "Completed"}, resp: make(chan error)}
+	writes <- wr
+	if err := <-wr.resp; err != nil {
+		t.Fatalf("update err: %v", err)
+	}
+	if ask(reads)[0].Status != "Completed" {
+		t.Fatalf("status not updated")
 	}
 
-	err := todo.SaveTodos(ctx, fileName, todos)
-	if err != nil {
-		t.Fatalf("Failed to save todos: %v", err)
+	// delete
+	wr = writeReq{op: "delete", todo: Todo{ID: id}, resp: make(chan error)}
+	writes <- wr
+	<-wr.resp
+	if len(ask(reads)) != 0 {
+		t.Fatalf("delete failed")
 	}
 
-	loadedTodos, err := todo.LoadTodos(ctx, fileName)
-	if err != nil {
-		t.Fatalf("Failed to load todos: %v", err)
-	}
-
-	if len(loadedTodos) != 1 {
-		t.Errorf("Expected 1 loaded todo, got %d", len(loadedTodos))
-	}
-	if loadedTodos[0].Description != "Task A" {
-		t.Errorf("Expected 'Task A', got '%s'", loadedTodos[0].Description)
+	// persisted JSON should decode to empty slice
+	data, _ := os.ReadFile(FileName)
+	var slice []Todo
+	if err := json.Unmarshal(data, &slice); err != nil || len(slice) != 0 {
+		t.Fatalf("file not empty json: %s (err %v)", data, err)
 	}
 }

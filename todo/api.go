@@ -1,87 +1,78 @@
 package todo
 
 import (
-	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 )
 
+// TraceMiddleware unchanged
 func TraceMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		traceID := r.Header.Get("X-Trace-ID")
-		if traceID == "" {
-			traceID = generateID()
-		}
-		ctx := context.WithValue(r.Context(), TraceIDKey, traceID)
+		ctx := r.Context()
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-func CreateHandler(todos *[]Todo) http.HandlerFunc { //
+// handler constructors that capture actor channels
+func CreateHandler(reads chan<- readReq, writes chan<- writeReq) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		var t Todo
-		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-			http.Error(w, "Invalid input", http.StatusBadRequest)
+		var body struct{ Description string }
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", 400)
 			return
 		}
-		t.ID = generateID()
-		*todos = append(*todos, t)
-		SaveTodos(ctx, FileName, *todos)
+
+		t := NewTodo(body.Description)
+		resp := make(chan error)
+		writes <- writeReq{op: "add", todo: t, resp: resp}
+		if err := <-resp; err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
 		w.WriteHeader(http.StatusCreated)
 	}
 }
 
-func GetHandler(todos *[]Todo) http.HandlerFunc {
+func GetHandler(reads chan<- readReq) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		json.NewEncoder(w).Encode(*todos)
-		slog.Info("Returned todos", "traceID", ctx.Value(TraceIDKey))
+		req := readReq{resp: make(chan []Todo)}
+		reads <- req
+		todos := <-req.resp
+		json.NewEncoder(w).Encode(todos)
 	}
 }
 
-func UpdateHandler(todos *[]Todo) http.HandlerFunc {
+func UpdateHandler(reads chan<- readReq, writes chan<- writeReq) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		var input struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			http.Error(w, "Invalid input", http.StatusBadRequest)
+		var body struct{ ID, Status string }
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", 400)
 			return
 		}
-		for i := range *todos {
-			if (*todos)[i].ID == input.ID {
-				(*todos)[i].Status = input.Status
-				SaveTodos(ctx, FileName, *todos)
-				w.WriteHeader(http.StatusOK)
-				return
-			}
+		resp := make(chan error)
+		writes <- writeReq{op: "update", todo: Todo{ID: body.ID, Status: body.Status, Description: ""}, resp: resp}
+		if err := <-resp; err != nil {
+			http.Error(w, err.Error(), 500)
+			return
 		}
-		http.Error(w, "Task not found", http.StatusNotFound)
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
-func DeleteHandler(todos *[]Todo) http.HandlerFunc {
+func DeleteHandler(writes chan<- writeReq) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		var input struct {
-			ID string `json:"id"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-			http.Error(w, "Invalid input", http.StatusBadRequest)
+		var body struct{ ID string }
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "bad json", 400)
 			return
 		}
-		for i := range *todos {
-			if (*todos)[i].ID == input.ID {
-				*todos = append((*todos)[:i], (*todos)[i+1:]...)
-				SaveTodos(ctx, FileName, *todos)
-				w.WriteHeader(http.StatusOK)
-				return
-			}
+		resp := make(chan error)
+		writes <- writeReq{op: "delete", todo: Todo{ID: body.ID}, resp: resp}
+		if err := <-resp; err != nil {
+			http.Error(w, err.Error(), 500)
+			return
 		}
-		http.Error(w, "Task not found", http.StatusNotFound)
+		w.WriteHeader(http.StatusOK)
 	}
 }

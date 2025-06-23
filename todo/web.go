@@ -1,13 +1,15 @@
 package todo
 
 import (
-	"html/template" // for HTML templating
-	"net/http"      // for HTTP server functionality
+	"html/template"
+	"net/http"
 )
 
-func ListHandler(todos *[]Todo) http.HandlerFunc { // Create a handler function for listing todos
-	tmpl := template.Must(template.ParseFiles("templates/list.html")) // Load the HTML template for listing todos
-	return func(w http.ResponseWriter, r *http.Request) {             // Handle the HTTP request for listing todos
-		tmpl.Execute(w, *todos) // Render the template with the current list of todos
+func ListHandler(reads chan<- readReq) http.HandlerFunc {
+	tmpl := template.Must(template.ParseFiles("templates/list.html"))
+	return func(w http.ResponseWriter, r *http.Request) {
+		req := readReq{resp: make(chan []Todo)}
+		reads <- req
+		tmpl.Execute(w, <-req.resp)
 	}
 }

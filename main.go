@@ -12,59 +12,38 @@ import (
 )
 
 func main() {
-	// Setup structured logging
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	// Handle graceful shutdown
+	// root context & graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	ctx = context.WithValue(ctx, todo.TraceIDKey, uuid.NewString())
 
-	// Create base context with trace ID
-	traceID := uuid.NewString()
-	ctx = context.WithValue(ctx, todo.TraceIDKey, traceID)
+	// load initial data then start actor
+	initial, _ := todo.LoadTodos(ctx, todo.FileName)
+	readCh, writeCh := todo.StartActor(ctx, todo.FileName, initial)
 
-	// Load todos from file
-	todos, err := todo.LoadTodos(ctx, todo.FileName)
-	if err != nil {
-		slog.Error("Failed to load todos", "traceID", traceID, "error", err)
-		os.Exit(1)
-	}
-
-	// Start CLI menu in a goroutine
-	go todo.StartCLIMenu(ctx, &todos, todo.FileName)
-
-	// Setup ServeMux
+	// HTTP routes
 	mux := http.NewServeMux()
-	mux.HandleFunc("/create", todo.CreateHandler(&todos))
-	mux.HandleFunc("/get", todo.GetHandler(&todos))
-	mux.HandleFunc("/update", todo.UpdateHandler(&todos))
-	mux.HandleFunc("/delete", todo.DeleteHandler(&todos))
+	mux.Handle("/create", todo.TraceMiddleware(todo.CreateHandler(readCh, writeCh)))
+	mux.Handle("/get", todo.TraceMiddleware(todo.GetHandler(readCh)))
+	mux.Handle("/update", todo.TraceMiddleware(todo.UpdateHandler(readCh, writeCh)))
+	mux.Handle("/delete", todo.TraceMiddleware(todo.DeleteHandler(writeCh)))
 
-	// Static /about page
+	// static & dynamic pages
 	fs := http.FileServer(http.Dir("./static"))
 	mux.Handle("/about/", http.StripPrefix("/about", fs))
-
-	// Dynamic /list page
-	mux.HandleFunc("/list", todo.ListHandler(&todos))
-
-	// Start server
-	server := &http.Server{
-		Addr:    ":8080",
-		Handler: todo.TraceMiddleware(mux),
-	}
+	mux.Handle("/list", todo.TraceMiddleware(todo.ListHandler(readCh)))
 
 	go func() {
-		slog.Info("Starting HTTP server", "addr", server.Addr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("HTTP server error", "error", err)
+		slog.Info("HTTP server :8080")
+		if err := http.ListenAndServe(":8080", mux); err != nil && ctx.Err() == nil {
+			slog.Error("server error", "err", err)
+			stop()
 		}
 	}()
 
-	// Wait for shutdown
-	<-ctx.Done()
-	slog.Info("Shutting down Program...")
-	server.Shutdown(context.Background())
-	todo.SaveTodos(ctx, todo.FileName, todos)
-	slog.Info("Shutdown complete.")
+	<-ctx.Done() // wait Ctrl-C
+	slog.Info("server shutdown")
 }

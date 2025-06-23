@@ -1,10 +1,13 @@
-Simple command line To-Do List application. It lets you add, view, update and delete tasks with persistant storage using a local JSON file.
+To-Do List (HTTP + Web UI, Actor Safe Concurrency)
+
+A Go application that exposes a JSON REST API and simple web pages for managing a to-do list.
+
 
 Features:
   1. Add tasks with a description
-  2. View all curret tasks with their status
-  3. Update a task status(Not started, In Progress and Completed)
-  4. Delete Tasks by number
+  2. View all current tasks with their status
+  3. Update a task status(Not started, Started and Completed)
+  4. Delete Tasks by ID
   5. Automatically saves and loads tasks from data.json
 
 Prerequisites:
@@ -21,18 +24,33 @@ How To Run:
 
 How to use:
 
-Once running you will see the following menu:
+Curl:
 
-  Choose an option:
-  1. Add Task
-  2. List Tasks
-  3. Update Task Status
-  4. Delete Task
-  5. Exit
-     
-     ->     (Enter the number for the action you want here and follow the prompts)
+To Create a Task:
+$ curl -X POST -H "Content-Type: application/json" -d '{"description": "INSERT TEST NAME HERE"}' http://localhost:8080/create
 
-  Your tasks are saved automatically to the data.json in the same folder
+To Update a Task:
+$ curl -X PUT -H "Content-Type: application/json" -d '{"description": "INSERT TEST NAME HERE", "id": "INSERT ID HERE", "status": "INSERT UPDATED STATUS HERE"}' http://localhost:8080/update 
+
+To Delete a Task:
+$ curl -X DELETE -H "Content-Type: application/json" -d '{"id": "INSERT ID HERE "}' http://localhost:8080/delete
+
+To View all Tasks:
+curl http://localhost:8080/get
+
+
+Tests:
+
+Functional and Concurrency Tests:
+Go test -v ./todo
+
+Race Detector (Needs gcc / CGO):
+CGO_ENABLED=1 go test -race ./todo
+
+
+Actor_test.go fires many concurrent requests to demonstrate the actor layer is race free
+Todo_test.go checks add/update/delete JSON persistence
+
 
 ---
 Author
